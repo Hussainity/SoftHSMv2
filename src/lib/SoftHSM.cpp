@@ -857,6 +857,7 @@ void SoftHSM::prepareSupportedMechanisms(std::map<std::string, CK_MECHANISM_TYPE
 	t["CKM_CONCATENATE_DATA_AND_BASE"] = CKM_CONCATENATE_DATA_AND_BASE;
 	t["CKM_CONCATENATE_BASE_AND_DATA"] = CKM_CONCATENATE_BASE_AND_DATA;
 	t["CKM_CONCATENATE_BASE_AND_KEY"] = CKM_CONCATENATE_BASE_AND_KEY;
+	t["CKM_XOR_BASE_AND_KEY"] = CKM_XOR_BASE_AND_KEY;
 
 	supportedMechanisms.clear();
 	for (auto it = t.begin(); it != t.end(); ++it)
@@ -1377,6 +1378,7 @@ CK_RV SoftHSM::C_GetMechanismInfo(CK_SLOT_ID slotID, CK_MECHANISM_TYPE type, CK_
 	    case CKM_CONCATENATE_DATA_AND_BASE:
 	    case CKM_CONCATENATE_BASE_AND_DATA:
 	    case CKM_CONCATENATE_BASE_AND_KEY:
+	    case CKM_XOR_BASE_AND_KEY:
 	        pInfo->ulMinKeySize = 1;
 	        pInfo->ulMaxKeySize = 512;
 	        pInfo->flags = CKF_DERIVE;
@@ -7925,6 +7927,7 @@ CK_RV SoftHSM::C_DeriveKey
 		case CKM_CONCATENATE_DATA_AND_BASE:
 		case CKM_CONCATENATE_BASE_AND_DATA:
 		case CKM_CONCATENATE_BASE_AND_KEY:
+		case CKM_XOR_BASE_AND_KEY:
 			break;
 
 		default:
@@ -7958,8 +7961,9 @@ CK_RV SoftHSM::C_DeriveKey
 		return CKR_KEY_FUNCTION_NOT_PERMITTED;
 
 	// Check if the specified mechanism is allowed for the key
-	if (!isMechanismPermitted(key, pMechanism->mechanism))
+	if (!isMechanismPermitted(key, pMechanism->mechanism)) {
 		return CKR_MECHANISM_INVALID;
+	}
 
 	// Extract information from the template that is needed to create the object.
 	CK_OBJECT_CLASS objClass;
@@ -7969,7 +7973,8 @@ CK_RV SoftHSM::C_DeriveKey
 	CK_CERTIFICATE_TYPE dummy;
     bool isImplicit = pMechanism->mechanism == CKM_CONCATENATE_DATA_AND_BASE ||
 			pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_DATA ||
-			pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY;
+			pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY ||
+			pMechanism->mechanism == CKM_XOR_BASE_AND_KEY;
     if (isImplicit) {
         // PKCS#11 2.40 section 2.31.5: if no key type is provided then the key produced by this mechanism will
         // be a generic secret key
@@ -8045,7 +8050,8 @@ CK_RV SoftHSM::C_DeriveKey
 	    pMechanism->mechanism == CKM_AES_CBC_ENCRYPT_DATA ||
 	    pMechanism->mechanism == CKM_CONCATENATE_DATA_AND_BASE ||
 	    pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_DATA ||
-	    pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY)
+	    pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY ||
+	    pMechanism->mechanism == CKM_XOR_BASE_AND_KEY)
 	{
 		// Check key class and type
 		CK_KEY_TYPE baseKeyType = key->getUnsignedLongValue(CKA_KEY_TYPE, CKK_VENDOR_DEFINED);
@@ -12345,7 +12351,8 @@ CK_RV SoftHSM::deriveSymmetric
 		       pData,
                length);
 	}
-	else if (pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY &&
+	else if ((pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY ||
+		  pMechanism->mechanism == CKM_XOR_BASE_AND_KEY) &&
 		 pMechanism->ulParameterLen == sizeof(CK_OBJECT_HANDLE))
 	{
 		phOtherKey = CK_OBJECT_HANDLE_PTR(pMechanism->pParameter);
@@ -12354,7 +12361,6 @@ CK_RV SoftHSM::deriveSymmetric
 			DEBUG_MSG("There must be handle in the parameter");
 			return CKR_MECHANISM_PARAM_INVALID;
 		}
-		DEBUG_MSG("(0x%08X) Other key handle is (0x%08X)", phOtherKey, *phOtherKey);
 	}
 	else
 	{
@@ -12373,7 +12379,8 @@ CK_RV SoftHSM::deriveSymmetric
 		return CKR_GENERAL_ERROR;
 
 	// Extract another key
-	if (pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY) {
+	if (pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY ||
+		pMechanism->mechanism == CKM_XOR_BASE_AND_KEY) {
 		// Check the key handle.
 		otherKey = (OSObject *)handleManager->getObject(*phOtherKey);
 		if (otherKey == NULL_PTR || !otherKey->isValid()) return CKR_OBJECT_HANDLE_INVALID;
@@ -12419,7 +12426,8 @@ CK_RV SoftHSM::deriveSymmetric
 	// Check the length if it specified or a mechanism is not one of misc mechanisms
 	if (byteLen > 0 || (pMechanism->mechanism != CKM_CONCATENATE_DATA_AND_BASE &&
 			pMechanism->mechanism != CKM_CONCATENATE_BASE_AND_DATA &&
-			pMechanism->mechanism != CKM_CONCATENATE_BASE_AND_KEY)) {
+			pMechanism->mechanism != CKM_CONCATENATE_BASE_AND_KEY &&
+			pMechanism->mechanism != CKM_XOR_BASE_AND_KEY)) {
 		switch (keyType) {
 			case CKK_GENERIC_SECRET:
 				if (byteLen == 0) {
@@ -12513,6 +12521,7 @@ CK_RV SoftHSM::deriveSymmetric
 	    case CKM_CONCATENATE_DATA_AND_BASE:
 	    case CKM_CONCATENATE_BASE_AND_DATA:
 	    case CKM_CONCATENATE_BASE_AND_KEY:
+	    case CKM_XOR_BASE_AND_KEY:
 	        break;
 		default:
 			return CKR_MECHANISM_INVALID;
@@ -12527,7 +12536,8 @@ CK_RV SoftHSM::deriveSymmetric
 
     if (pMechanism->mechanism == CKM_CONCATENATE_DATA_AND_BASE ||
 			pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_DATA ||
-			pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY) {
+			pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY ||
+			pMechanism->mechanism == CKM_XOR_BASE_AND_KEY) {
         // Get the key data
         ByteString keydata;
 
@@ -12550,13 +12560,25 @@ CK_RV SoftHSM::deriveSymmetric
 				pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY) {
 			secretValue += keydata;
 			secretValue += data;
+        } else if (pMechanism->mechanism == CKM_XOR_BASE_AND_KEY) {
+			// XOR the two keys together
+			size_t xorLen = (keydata.size() < data.size()) ? keydata.size() : data.size();
+			secretValue.resize(xorLen);
+			for (size_t i = 0; i < xorLen; i++) {
+				secretValue[i] = keydata[i] ^ data[i];
+			}
         } else {
         	return CKR_MECHANISM_INVALID;
         }
 
         // If the CKA_VALUE_LEN attribute is not present use computed size
         if (byteLen == 0) {
-            byteLen = data.size() + keydata.size();
+			if (pMechanism->mechanism == CKM_XOR_BASE_AND_KEY) {
+				// For XOR, use the minimum of the two key lengths
+				byteLen = (keydata.size() < data.size()) ? keydata.size() : data.size();
+			} else {
+				byteLen = data.size() + keydata.size();
+			}
             CK_RV rv = checkKeyLength(keyType, byteLen);
             if (rv != CKR_OK) {
             	return rv;
@@ -12650,11 +12672,12 @@ CK_RV SoftHSM::deriveSymmetric
 			bOK = bOK && osobject->setAttribute(CKA_LOCAL,false);
 
 			// Common Secret Key Attributes
-			if (pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY) {
-				// [PKCS#11 v2.40, 2.31.3]
+			if (pMechanism->mechanism == CKM_CONCATENATE_BASE_AND_KEY ||
+				pMechanism->mechanism == CKM_XOR_BASE_AND_KEY) {
+				// [PKCS#11 v2.40, 2.31.3 and 2.31.7]
 				// If either of the two original keys has its CKA_SENSITIVE attribute
 				// set to CK_TRUE, so does the derived key.  If not, then the derived
-				// key’s CKA_SENSITIVE attribute is set either from the supplied template
+				// key's CKA_SENSITIVE attribute is set either from the supplied template
 				// or from a default value.
 				bool bSensitive = baseKey->getBooleanValue(CKA_SENSITIVE, true) ||
 								  otherKey->getBooleanValue(CKA_SENSITIVE, true);
@@ -12663,14 +12686,14 @@ CK_RV SoftHSM::deriveSymmetric
 				}
 				// If either of the two original keys has its CKA_EXTRACTABLE attribute
 				// set to CK_FALSE, so does the derived key.  If not, then the derived
-				// key’s CKA_EXTRACTABLE attribute is set either from the supplied template
+				// key's CKA_EXTRACTABLE attribute is set either from the supplied template
 				// or from a default value.
 				bool bExtractable = baseKey->getBooleanValue(CKA_EXTRACTABLE, true) &&
 									otherKey->getBooleanValue(CKA_EXTRACTABLE, true);
 				if (!bExtractable) {
 					bOK = bOK && osobject->setAttribute(CKA_EXTRACTABLE, false);
 				}
-				// The derived key’s CKA_ALWAYS_SENSITIVE attribute is set to CK_TRUE
+				// The derived key's CKA_ALWAYS_SENSITIVE attribute is set to CK_TRUE
 				// if and only if both of the original keys have their CKA_ALWAYS_SENSITIVE
 				// attributes set to CK_TRUE.
 				bool bAlwaysSensitive = baseKey->getBooleanValue(CKA_ALWAYS_SENSITIVE, false) &&

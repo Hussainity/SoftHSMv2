@@ -1106,3 +1106,153 @@ void DeriveTests::testMiscDerivations() {
 #undef ASSERT_KEY_IS_EXTRACTABLE
 }
 
+void DeriveTests::testXorBaseAndKey() {
+	CK_RV rv;
+	CK_SESSION_HANDLE hSessionRO;
+	CK_SESSION_HANDLE hSessionRW;
+	CK_BBOOL bTrue = CK_TRUE;
+	CK_BBOOL bFalse = CK_FALSE;
+
+	CRYPTOKI_F_PTR( C_Finalize(NULL_PTR) );
+
+	rv = CRYPTOKI_F_PTR( C_OpenSession(m_initializedTokenSlotID, CKF_SERIAL_SESSION, NULL_PTR, NULL_PTR, &hSessionRO) );
+	CPPUNIT_ASSERT(rv == CKR_CRYPTOKI_NOT_INITIALIZED);
+
+	rv = CRYPTOKI_F_PTR( C_Initialize(NULL_PTR) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	rv = CRYPTOKI_F_PTR( C_OpenSession(m_initializedTokenSlotID, CKF_SERIAL_SESSION, NULL_PTR, NULL_PTR, &hSessionRO) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	rv = CRYPTOKI_F_PTR( C_OpenSession(m_initializedTokenSlotID, CKF_SERIAL_SESSION | CKF_RW_SESSION, NULL_PTR, NULL_PTR, &hSessionRW) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	rv = CRYPTOKI_F_PTR( C_Login(hSessionRO,CKU_USER,m_userPin1,m_userPin1Length) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	// Test 1: Basic XOR operation with known values
+	// Base key: 0x01234567, Other key: 0x89ABCDEF, Expected: 0x88888888
+	CK_BYTE baseKeyValue[] = { 0x01, 0x23, 0x45, 0x67 };
+	CK_BYTE otherKeyValue[] = { 0x89, 0xAB, 0xCD, 0xEF };
+	CK_BYTE expectedXor[] = { 0x88, 0x88, 0x88, 0x88 };
+
+	CK_OBJECT_CLASS secretClass = CKO_SECRET_KEY;
+	CK_KEY_TYPE keyType = CKK_GENERIC_SECRET;
+	CK_ATTRIBUTE baseKeyAttribs[] = {
+		{ CKA_CLASS, &secretClass, sizeof(secretClass) },
+		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
+		{ CKA_TOKEN, &bFalse, sizeof(bFalse) },
+		{ CKA_PRIVATE, &bFalse, sizeof(bFalse) },
+		{ CKA_SENSITIVE, &bFalse, sizeof(bFalse) },
+		{ CKA_EXTRACTABLE, &bTrue, sizeof(bTrue) },
+		{ CKA_DERIVE, &bTrue, sizeof(bTrue) },
+		{ CKA_VALUE, &baseKeyValue, sizeof(baseKeyValue) }
+	};
+
+	CK_ATTRIBUTE otherKeyAttribs[] = {
+		{ CKA_CLASS, &secretClass, sizeof(secretClass) },
+		{ CKA_KEY_TYPE, &keyType, sizeof(keyType) },
+		{ CKA_TOKEN, &bFalse, sizeof(bFalse) },
+		{ CKA_PRIVATE, &bFalse, sizeof(bFalse) },
+		{ CKA_SENSITIVE, &bFalse, sizeof(bFalse) },
+		{ CKA_EXTRACTABLE, &bTrue, sizeof(bTrue) },
+		{ CKA_DERIVE, &bTrue, sizeof(bTrue) },
+		{ CKA_VALUE, &otherKeyValue, sizeof(otherKeyValue) }
+	};
+
+	CK_OBJECT_HANDLE hBaseKey = CK_INVALID_HANDLE;
+	CK_OBJECT_HANDLE hOtherKey = CK_INVALID_HANDLE;
+	rv = CRYPTOKI_F_PTR(C_CreateObject(hSessionRW, baseKeyAttribs, sizeof(baseKeyAttribs) / sizeof(CK_ATTRIBUTE), &hBaseKey));
+	CPPUNIT_ASSERT(rv == CKR_OK);
+	rv = CRYPTOKI_F_PTR(C_CreateObject(hSessionRW, otherKeyAttribs, sizeof(otherKeyAttribs) / sizeof(CK_ATTRIBUTE), &hOtherKey));
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	// Derive key using XOR_BASE_AND_KEY without specifying length or type
+	CK_MECHANISM mechanism = { CKM_XOR_BASE_AND_KEY, &hOtherKey, sizeof(hOtherKey) };
+	CK_ATTRIBUTE derivedKeyAttribs[] = {
+		{ CKA_CLASS, &secretClass, sizeof(secretClass) },
+		{ CKA_EXTRACTABLE, &bTrue, sizeof(bTrue) }
+	};
+
+	CK_OBJECT_HANDLE hDerivedKey = CK_INVALID_HANDLE;
+	rv = CRYPTOKI_F_PTR( C_DeriveKey(hSessionRW, &mechanism, hBaseKey,
+		derivedKeyAttribs, sizeof(derivedKeyAttribs)/sizeof(CK_ATTRIBUTE),
+		&hDerivedKey) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	// Verify the derived key value
+	CK_BYTE derivedValue[4];
+	CK_KEY_TYPE derivedKeyType = 0;
+	CK_ATTRIBUTE checkAttribs[] = {
+		{ CKA_VALUE, derivedValue, sizeof(derivedValue) },
+		{ CKA_KEY_TYPE, &derivedKeyType, sizeof(derivedKeyType) }
+	};
+	rv = CRYPTOKI_F_PTR( C_GetAttributeValue(hSessionRW, hDerivedKey, checkAttribs, 2) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+	CPPUNIT_ASSERT(checkAttribs[0].ulValueLen == 4);
+	CPPUNIT_ASSERT(memcmp(derivedValue, expectedXor, 4) == 0);
+	CPPUNIT_ASSERT(derivedKeyType == CKK_GENERIC_SECRET);
+
+	// Test 2: Derive with explicit length (shorter than both keys)
+	CK_ULONG derivedLength = 2;
+	CK_ATTRIBUTE derivedKeyWithLengthAttribs[] = {
+		{ CKA_CLASS, &secretClass, sizeof(secretClass) },
+		{ CKA_EXTRACTABLE, &bTrue, sizeof(bTrue) },
+		{ CKA_VALUE_LEN, &derivedLength, sizeof(derivedLength) }
+	};
+
+	rv = CRYPTOKI_F_PTR( C_DeriveKey(hSessionRW, &mechanism, hBaseKey,
+		derivedKeyWithLengthAttribs, sizeof(derivedKeyWithLengthAttribs)/sizeof(CK_ATTRIBUTE),
+		&hDerivedKey) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	CK_BYTE derivedValue2[2];
+	checkAttribs[0].pValue = derivedValue2;
+	checkAttribs[0].ulValueLen = sizeof(derivedValue2);
+	rv = CRYPTOKI_F_PTR( C_GetAttributeValue(hSessionRW, hDerivedKey, checkAttribs, 2) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+	CPPUNIT_ASSERT(checkAttribs[0].ulValueLen == 2);
+	CPPUNIT_ASSERT(memcmp(derivedValue2, expectedXor, 2) == 0);
+
+	// Test 3: Derive with explicit key type (AES)
+	CK_KEY_TYPE aesKeyType = CKK_AES;
+	derivedLength = 16;
+	CK_BYTE baseKeyValue16[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+	                             0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x30 };
+	CK_BYTE otherKeyValue16[] = { 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+	                              0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20 };
+	CK_BYTE expectedXor16[] = { 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
+	                            0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10 };
+
+	baseKeyAttribs[7].pValue = &baseKeyValue16;
+	baseKeyAttribs[7].ulValueLen = sizeof(baseKeyValue16);
+	otherKeyAttribs[7].pValue = &otherKeyValue16;
+	otherKeyAttribs[7].ulValueLen = sizeof(otherKeyValue16);
+
+	rv = CRYPTOKI_F_PTR(C_CreateObject(hSessionRW, baseKeyAttribs, sizeof(baseKeyAttribs) / sizeof(CK_ATTRIBUTE), &hBaseKey));
+	CPPUNIT_ASSERT(rv == CKR_OK);
+	rv = CRYPTOKI_F_PTR(C_CreateObject(hSessionRW, otherKeyAttribs, sizeof(otherKeyAttribs) / sizeof(CK_ATTRIBUTE), &hOtherKey));
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	mechanism.pParameter = &hOtherKey;
+	CK_ATTRIBUTE derivedAesKeyAttribs[] = {
+		{ CKA_CLASS, &secretClass, sizeof(secretClass) },
+		{ CKA_KEY_TYPE, &aesKeyType, sizeof(aesKeyType) },
+		{ CKA_EXTRACTABLE, &bTrue, sizeof(bTrue) }
+	};
+
+	rv = CRYPTOKI_F_PTR( C_DeriveKey(hSessionRW, &mechanism, hBaseKey,
+		derivedAesKeyAttribs, sizeof(derivedAesKeyAttribs)/sizeof(CK_ATTRIBUTE),
+		&hDerivedKey) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+
+	CK_BYTE derivedValue16[16];
+	checkAttribs[0].pValue = derivedValue16;
+	checkAttribs[0].ulValueLen = sizeof(derivedValue16);
+	rv = CRYPTOKI_F_PTR( C_GetAttributeValue(hSessionRW, hDerivedKey, checkAttribs, 2) );
+	CPPUNIT_ASSERT(rv == CKR_OK);
+	CPPUNIT_ASSERT(checkAttribs[0].ulValueLen == 16);
+	CPPUNIT_ASSERT(memcmp(derivedValue16, expectedXor16, 16) == 0);
+	CPPUNIT_ASSERT(derivedKeyType == CKK_AES);
+}
+

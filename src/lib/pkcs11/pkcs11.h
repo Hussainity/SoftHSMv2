@@ -1294,6 +1294,7 @@ extern "C" {
 #define CKM_ECDH_COF_AES_KEY_WRAP               (0x4039UL)
 #define CKM_PUB_KEY_FROM_PRIV_KEY               (0x403AUL)
 #define CKM_VENDOR_DEFINED                      ((unsigned long) (1UL << 31))
+#define CKM_XOR_BASE_AND_KEY                    (CKM_VENDOR_DEFINED + 27)
 
 /* CK_NOTIFICATION */
 #define CKN_SURRENDER                           (0UL)
