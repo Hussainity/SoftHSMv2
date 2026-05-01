@@ -58,6 +58,9 @@ ROOT
 *.cmake
 CMakeFiles
 
+# Nix development environment
+.softhsm-dev/
+
 # Specifics
 softhsm2.module
 src/bin/common/.dirstamp
